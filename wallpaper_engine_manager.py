@@ -8,8 +8,9 @@ import psutil
 import logging
 import threading
 from pathlib import Path
+from datetime import datetime
 
-# הגדרת לוג
+# Setup logging
 logging.basicConfig(
     filename='wallpaper_engine_manager.log',
     level=logging.INFO,
@@ -17,13 +18,16 @@ logging.basicConfig(
     encoding='utf-8'
 )
 
-# הגדרות
-CHECK_INTERVAL = 10  # בדיקה כל 10 שניות
-RESTART_DELAY = 3    # המתנה של 3 שניות לפני הפעלה מחדש
+# Settings
+CHECK_INTERVAL = 10                    # Check every 10 seconds
+RESTART_DELAY = 3                      # Wait 3 seconds before restarting
+LONG_SLEEP_THRESHOLD = 2.5 * 60 * 60  # 2.5 hours in seconds
+SHORT_SLEEP_DELAY = 5                  # Wait 5 seconds for short sleeps
+LONG_SLEEP_DELAY = 30                  # Wait 30 seconds for long sleeps (2.5+ hours)
 
 class WallpaperEngineManager:
     def __init__(self):
-        # נתיבים אפשריים של Wallpaper Engine
+        # Possible Wallpaper Engine paths
         self.wallpaper_paths = [
             r"D:\SteamLibrary\steamapps\common\wallpaper_engine\wallpaper32.exe",
             r"D:\SteamLibrary\steamapps\common\wallpaper_engine\wallpaper64.exe",
@@ -34,33 +38,36 @@ class WallpaperEngineManager:
         ]
         self.wallpaper_exe = self.find_wallpaper_engine()
         self.process_name = "wallpaper32.exe" if "wallpaper32" in self.wallpaper_exe else "wallpaper64.exe"
-        self.is_sleeping = False  # סטטוס שינה
-        self.monitoring_active = True  # האם המוניטור פעיל
-        self.monitor_thread = None  # ה-thread של המוניטור
+        self.is_sleeping = False      # Sleep status
+        self.monitoring_active = True # Is monitor active
+        self.monitor_thread = None    # Monitor thread
+        self.sleep_start_time = None  # Track when sleep started
         
     def find_wallpaper_engine(self):
-        """מוצא את הנתיב של Wallpaper Engine"""
+        """Find Wallpaper Engine path"""
         for path in self.wallpaper_paths:
             if os.path.exists(path):
-                logging.info(f"נמצא Wallpaper Engine ב: {path}")
+                logging.info(f"Found Wallpaper Engine at: {path}")
                 return path
         
-        # אם לא נמצא, נסה לחפש בכונני הדיסק
-        logging.warning("לא נמצא Wallpaper Engine בנתיבים הרגילים, מחפש...")
-        for drive in ['C:', 'D:', 'E:']:
+        # If not found, try searching in disk drives
+        logging.warning("Wallpaper Engine not found in common paths, searching...")
+        for drive in ['C:', 'D:', 'E:', 'F:']:
             search_paths = [
+                f"{drive}\\SteamLibrary\\steamapps\\common\\wallpaper_engine\\wallpaper32.exe",
+                f"{drive}\\Steam\\steamapps\\common\\wallpaper_engine\\wallpaper32.exe",
                 f"{drive}\\Program Files (x86)\\Steam\\steamapps\\common\\wallpaper_engine\\wallpaper32.exe",
                 f"{drive}\\Program Files\\Steam\\steamapps\\common\\wallpaper_engine\\wallpaper32.exe",
             ]
             for path in search_paths:
                 if os.path.exists(path):
-                    logging.info(f"נמצא Wallpaper Engine ב: {path}")
+                    logging.info(f"Found Wallpaper Engine at: {path}")
                     return path
         
-        raise FileNotFoundError("לא נמצא Wallpaper Engine! וודא שהתוכנה מותקנת.")
+        raise FileNotFoundError("Wallpaper Engine not found! Make sure it's installed.")
     
     def is_running(self):
-        """בודק אם Wallpaper Engine רץ"""
+        """Check if Wallpaper Engine is running"""
         for proc in psutil.process_iter(['name']):
             try:
                 if self.process_name.lower() in proc.info['name'].lower():
@@ -70,59 +77,59 @@ class WallpaperEngineManager:
         return False
     
     def start_wallpaper_engine(self):
-        """מפעיל את Wallpaper Engine"""
+        """Start Wallpaper Engine"""
         if not self.is_running():
             try:
                 subprocess.Popen(self.wallpaper_exe, shell=False)
-                logging.info("Wallpaper Engine הופעל בהצלחה")
-                print("✓ Wallpaper Engine הופעל")
+                logging.info("Wallpaper Engine started successfully")
+                print("✓ Wallpaper Engine started")
             except Exception as e:
-                logging.error(f"שגיאה בהפעלת Wallpaper Engine: {e}")
-                print(f"✗ שגיאה: {e}")
+                logging.error(f"Error starting Wallpaper Engine: {e}")
+                print(f"✗ Error: {e}")
         else:
-            logging.info("Wallpaper Engine כבר רץ")
+            logging.info("Wallpaper Engine already running")
     
     def stop_wallpaper_engine(self):
-        """סגירת Wallpaper Engine"""
+        """Stop Wallpaper Engine"""
         for proc in psutil.process_iter(['name', 'pid']):
             try:
                 if self.process_name.lower() in proc.info['name'].lower():
                     proc.terminate()
                     proc.wait(timeout=5)
-                    logging.info("Wallpaper Engine נסגר")
-                    print("✓ Wallpaper Engine נסגר")
+                    logging.info("Wallpaper Engine stopped")
+                    print("✓ Wallpaper Engine stopped")
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
                 pass
     
     def continuous_monitor(self):
-        """מוניטור רציף - בודק כל הזמן אם Wallpaper Engine רץ"""
-        logging.info("מוניטור רציף התחיל")
-        print("🔄 מוניטור רציף פעיל - בודק כל {} שניות".format(CHECK_INTERVAL))
+        """Continuous monitor - checks if Wallpaper Engine is running"""
+        logging.info("Continuous monitor started")
+        print(f"🔄 Continuous monitor active - checking every {CHECK_INTERVAL} seconds")
         
         while self.monitoring_active:
             try:
-                # אם המחשב לא בשינה וWallpaper Engine לא רץ - הפעל אותו
+                # If computer is not sleeping and Wallpaper Engine is not running - start it
                 if not self.is_sleeping and not self.is_running():
-                    logging.warning("Wallpaper Engine לא רץ! מפעיל מחדש...")
-                    print(f"⚠️  Wallpaper Engine נסגר - מפעיל מחדש...")
+                    logging.warning("Wallpaper Engine not running! Restarting...")
+                    print(f"⚠️  Wallpaper Engine closed - restarting...")
                     time.sleep(RESTART_DELAY)
                     self.start_wallpaper_engine()
                 
                 time.sleep(CHECK_INTERVAL)
                 
             except Exception as e:
-                logging.error(f"שגיאה במוניטור הרציף: {e}")
+                logging.error(f"Error in continuous monitor: {e}")
                 time.sleep(CHECK_INTERVAL)
     
     def start_monitoring(self):
-        """מתחיל את המוניטור הרציף ב-thread נפרד"""
+        """Start continuous monitor in separate thread"""
         if self.monitor_thread is None or not self.monitor_thread.is_alive():
             self.monitoring_active = True
             self.monitor_thread = threading.Thread(target=self.continuous_monitor, daemon=True)
             self.monitor_thread.start()
     
     def stop_monitoring(self):
-        """עוצר את המוניטור הרציף"""
+        """Stop continuous monitor"""
         self.monitoring_active = False
         if self.monitor_thread:
             self.monitor_thread.join(timeout=2)
@@ -134,7 +141,7 @@ class PowerEventMonitor:
         self.hwnd = None
         
     def create_window(self):
-        """יוצר חלון נסתר לקבלת הודעות מערכת"""
+        """Create hidden window to receive system messages"""
         wc = win32gui.WNDCLASS()
         wc.lpfnWndProc = self.wnd_proc
         wc.lpszClassName = "WallpaperEngineMonitor"
@@ -153,56 +160,88 @@ class PowerEventMonitor:
                 None
             )
         except Exception as e:
-            logging.error(f"שגיאה ביצירת חלון: {e}")
+            logging.error(f"Error creating window: {e}")
             raise
     
     def wnd_proc(self, hwnd, msg, wparam, lparam):
-        """מטפל בהודעות מערכת"""
+        """Handle system messages"""
         if msg == win32con.WM_POWERBROADCAST:
             if wparam == win32con.PBT_APMRESUMEAUTOMATIC:
-                # המחשב התעורר משינה
-                logging.info("המחשב התעורר משינה")
-                print("⚡ המחשב התעורר - מפעיל Wallpaper Engine...")
+                # Computer woke from sleep
+                wake_time = datetime.now()
+                
+                if self.manager.sleep_start_time:
+                    # Calculate sleep duration
+                    sleep_duration = (wake_time - self.manager.sleep_start_time).total_seconds()
+                    hours = sleep_duration / 3600
+                    
+                    logging.info(f"Computer woke from sleep - slept for {hours:.1f} hours")
+                    
+                    # Decide delay based on sleep duration
+                    if sleep_duration >= LONG_SLEEP_THRESHOLD:
+                        # Long sleep (2.5+ hours) - wait longer to prevent flickering
+                        delay = LONG_SLEEP_DELAY
+                        print(f"⚡ Computer woke up (slept {hours:.1f}h) - waiting {delay}s for display...")
+                        logging.info(f"Long sleep detected ({hours:.1f}h) - using {delay}s delay")
+                    else:
+                        # Short sleep (<2.5 hours) - quick resume
+                        delay = SHORT_SLEEP_DELAY
+                        print(f"⚡ Computer woke up (slept {hours:.1f}h) - waiting {delay}s...")
+                        logging.info(f"Short sleep detected ({hours:.1f}h) - using {delay}s delay")
+                else:
+                    # No sleep start time recorded - use default long delay for safety
+                    delay = LONG_SLEEP_DELAY
+                    print(f"⚡ Computer woke up - waiting {delay}s for display...")
+                    logging.info("Wake from sleep (unknown duration) - using default delay")
+                
+                # Wait based on calculated delay
+                time.sleep(delay)
+                
                 self.manager.is_sleeping = False
-                time.sleep(2)  # המתן קצר לאחר התעוררות
-                self.manager.start_wallpaper_engine()
+                self.manager.sleep_start_time = None  # Reset
+                print("✓ System ready - continuous monitor will start Wallpaper Engine")
+                # Continuous monitor will handle starting after this delay
                 
             elif wparam == win32con.PBT_APMSUSPEND:
-                # המחשב נכנס לשינה
-                logging.info("המחשב נכנס לשינה")
-                print("💤 המחשב נכנס לשינה - סוגר Wallpaper Engine...")
+                # Computer going to sleep
+                self.manager.sleep_start_time = datetime.now()
+                logging.info("Computer going to sleep")
+                print("💤 Computer sleeping - stopping Wallpaper Engine...")
                 self.manager.is_sleeping = True
                 self.manager.stop_wallpaper_engine()
                 
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
     
     def run(self):
-        """מריץ את הלולאה הראשית"""
+        """Run main loop"""
         self.create_window()
-        logging.info("המוניטור התחיל לרוץ")
-        print("🚀 המוניטור פועל! הסקריפט ממתין לאירועי מערכת...")
-        print("   💡 מוניטור רציף מופעל - Wallpaper Engine יהיה דלוק תמיד!")
-        print("   (לחץ Ctrl+C לעצירה)")
+        logging.info("Monitor started")
+        print("🚀 Monitor running! Script waiting for system events...")
+        print("   💡 Continuous monitor enabled - Wallpaper Engine will stay on!")
+        print(f"   🔧 Smart sleep mode:")
+        print(f"      • Short sleep (<2.5h): {SHORT_SLEEP_DELAY}s delay")
+        print(f"      • Long sleep (2.5h+): {LONG_SLEEP_DELAY}s delay (prevents flickering)")
+        print("   (Press Ctrl+C to stop)")
         
-        # הפעל Wallpaper Engine בהפעלה ראשונית
+        # Start Wallpaper Engine initially (on boot)
         self.manager.start_wallpaper_engine()
         
-        # התחל מוניטור רציף
+        # Start continuous monitor
         self.manager.start_monitoring()
         
-        # לולאת הודעות
+        # Message loop
         try:
             win32gui.PumpMessages()
         except KeyboardInterrupt:
-            logging.info("המוניטור הופסק על ידי המשתמש")
-            print("\n⏹️  עוצר מוניטור רציף...")
+            logging.info("Monitor stopped by user")
+            print("\n⏹️  Stopping continuous monitor...")
             self.manager.stop_monitoring()
-            print("👋 המוניטור נעצר")
+            print("👋 Monitor stopped")
 
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("  Wallpaper Engine Manager")
+    print("  Wallpaper Engine Manager - Smart Edition")
     print("=" * 50)
     
     try:
@@ -210,8 +249,8 @@ if __name__ == "__main__":
         monitor = PowerEventMonitor(manager)
         monitor.run()
     except FileNotFoundError as e:
-        print(f"\n❌ שגיאה: {e}")
+        print(f"\n❌ Error: {e}")
         logging.error(str(e))
     except Exception as e:
-        print(f"\n❌ שגיאה לא צפויה: {e}")
-        logging.error(f"שגיאה: {e}")
+        print(f"\n❌ Unexpected error: {e}")
+        logging.error(f"Error: {e}")
